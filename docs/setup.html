@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zaratan setup: Qwen3.8-27B + AgentDojo</title>
+<style>
+  @page { size: Letter; margin: 0.4in 0.48in; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 8.4pt/1.33 "Helvetica Neue", Helvetica, Arial, sans-serif; color: #1a1a1a; }
+  h1 { font-size: 15pt; margin: 0 0 1pt; letter-spacing: -0.2pt; }
+  .sub { color: #555; margin: 0 0 7pt; }
+  h2 { font-size: 9.2pt; margin: 7.5pt 0 2.5pt; text-transform: uppercase; letter-spacing: 0.6pt; color: #222; }
+  p { margin: 0 0 4pt; }
+  code, pre { font: 7.9pt/1.35 Menlo, Consolas, monospace; }
+  code { background: #f1f1ef; padding: 0 2pt; border-radius: 2pt; }
+  pre { background: #f1f1ef; margin: 2pt 0 4pt; padding: 3pt 6pt; border-radius: 3pt; white-space: pre-wrap; }
+  .blockers { border: 1.2pt solid #c2410c; background: #fff7ed; border-radius: 4pt; padding: 6pt 9pt 5pt; margin-bottom: 4pt; }
+  .blockers h2 { margin-top: 0; color: #9a3412; }
+  .blockers ul { margin: 0; padding-left: 12pt; }
+  .blockers li { margin-bottom: 2.5pt; }
+  .note { color: #666; font-size: 7.6pt; }
+  .cols { display: grid; grid-template-columns: 1.08fr 1fr; gap: 0 18pt; }
+  ol { margin: 0; padding-left: 13pt; }
+  ol li { margin-bottom: 3pt; }
+  table { border-collapse: collapse; width: 100%; margin: 1pt 0 4pt; }
+  td { padding: 1.6pt 4pt 1.6pt 0; vertical-align: top; border-bottom: 0.5pt solid #e2e2de; }
+  td:first-child { white-space: nowrap; }
+  ul.tight { margin: 0; padding-left: 12pt; }
+  ul.tight li { margin-bottom: 1.5pt; }
+</style>
+</head>
+<body>
+<h1>Qwen3.8-27B + AgentDojo on Zaratan: setup</h1>
+<p class="sub">CMSC848N · Research Group 05 · from Ishaan · Oct 21, 2026. One script self-hosts Qwen3.8-27B with vLLM and runs the AgentDojo prompt-injection suite against it. Every version is pinned, so we all get the same numbers.</p>
+
+<div class="blockers">
+  <h2>Current blockers (Wed Oct 21, 11:47 AM)</h2>
+  <ul>
+    <li><b>A100 queue:</b> 1,457 jobs pending, 66 running; Slurm's estimated start for a new 1× A100 job is <b>Nov 9</b>, after the midterm report is due (Nov 1). Ishaan's banking smoke test is queued on an A100 (<b>job 23429642</b>) and an H100 (<b>job 23429974</b>); whichever starts first runs and cancels the other. <b>Don't queue another.</b></li>
+    <li><b>H100 queue:</b> 57 pending, estimated start <b>Oct 28</b>, though short jobs often start much sooner (a 2-minute test started in under a minute). The course rules say H100s only when the project needs them; given the deadline Ishaan queued one 30-minute H100 smoke test (≤72 SU). <b>Ask the TAs at Friday's office hours (11–12)</b> before any longer H100 run.</li>
+    <li><b>Not validated end to end yet:</b> the smoke test hasn't run, because it's waiting for a GPU. Everything up to the GPU is checked: the image builds and reports the pinned versions (vLLM 0.32.0, AgentDojo 0.1.35), and the weights are complete. The first GPU run is what proves the FP8 model fits a 40 GB A100.</li>
+  </ul>
+  <p class="note">The estimates are Slurm's worst-case projections and move as jobs finish; short jobs can start early by fitting into gaps. Class allocation: 63k of 100k SU left.</p>
+</div>
+
+<div class="cols">
+<div>
+  <h2>Steps</h2>
+  <ol>
+    <li><b>Check access.</b> Log in with your UMD password + Duo, then check that <code>cmsc848n-class</code> is listed:
+      <pre>ssh &lt;directory-id&gt;@login.zaratan.umd.edu
+sbalance</pre></li>
+    <li><b>Copy the files over</b> (from your laptop), then unzip on Zaratan:
+      <pre>scp cmsc848n-agentdojo.zip \
+    &lt;directory-id&gt;@login.zaratan.umd.edu:scratch/
+cd ~/scratch &amp;&amp; unzip cmsc848n-agentdojo.zip
+cd cmsc848n_project</pre></li>
+    <li><b>Setup</b> (on the login node). It finds the group's shared image and weights and returns in seconds:
+      <pre>./make.sh setup</pre></li>
+    <li><b>Smoke test:</b> one GPU job, up to 30 min (≤24 SU on an A100). Banking: pay a bill, total March spending, then the bill payment again with an injection hidden in the bill. Checks that tool calling works end to end.
+      <pre>./make.sh smoke</pre></li>
+    <li><b>Baseline:</b> the <b>banking suite</b>, our focus. Its 16 user tasks run with no attack (benign utility), then each against all 9 injection tasks with the <code>important_instructions</code> attack (144 runs), split across 4 parallel AgentDojo processes. Up to 2 h (≤96 SU); rerun with the same <code>RUN_DIR</code> to resume. <code>SUITES=all</code> adds workspace, slack and travel (up to 6 h).
+      <pre>./make.sh baseline</pre></li>
+    <li><b>Check on it:</b>
+      <pre>./make.sh status     # queue + newest logs
+./make.sh results    # utility + ASR per suite</pre>
+      <span class="note">Attack success rate (ASR) = share of attacked runs where the agent did what the injection asked; lower is better. AgentDojo calls it "security".</span></li>
+  </ol>
+  <p style="margin-top:4pt"><b>Everyone logs in with their own UMD account</b> (any login node works; files are on shared scratch). The image, weights and results are shared, so <b>agree on one person per GPU run</b> and read the others' results in <code>runs/</code>. Duplicate jobs spend the class allocation and lengthen the queue.</p>
+</div>
+
+<div>
+  <h2>Settings</h2>
+  <p>Set them before the command, e.g. <code>THINKING=off ./make.sh baseline</code></p>
+  <table>
+    <tr><td><code>SUITES</code></td><td><code>banking</code> (default) or <code>all</code></td></tr>
+    <tr><td><code>THINKING</code></td><td>Qwen3.8 reasoning effort: <code>off</code>, <code>low</code> (default), <code>medium</code>, <code>xhigh</code>.</td></tr>
+    <tr><td><code>MAX_MODEL_LEN</code></td><td>context length; default 32768. Lower it if vLLM runs out of memory.</td></tr>
+    <tr><td><code>RUN_DIR</code></td><td>reuse a run folder; finished tasks are skipped</td></tr>
+    <tr><td><code>TIME_LIMIT</code></td><td>Slurm walltime, e.g. <code>02:00:00</code></td></tr>
+    <tr><td><code>PROFILE=h100</code></td><td>one H100 instead of an A100. Only with TA approval.</td></tr>
+  </table>
+
+  <h2>Where things live</h2>
+  <p><code>/scratch/zt1/project/cmsc848n/shared/proj05_agentdojo/</code></p>
+  <ul class="tight">
+    <li><code>images/</code>: the Apptainer image &nbsp;·&nbsp; <code>hf/</code>: model weights</li>
+    <li><code>runs/&lt;time&gt;-&lt;mode&gt;-a100-think-low/</code>: <code>results.txt</code>, <code>config.env</code> (exact settings), <code>vllm.log</code>, one log per shard, AgentDojo traces</li>
+    <li><code>runs/slurm/</code>: Slurm job logs</li>
+  </ul>
+
+  <h2>What's pinned</h2>
+  <p>vLLM 0.32.0 (image digest) · <code>Qwen/Qwen3.8-27B-FP8</code> @ <code>017b9c7</code> · AgentDojo 0.1.35 + every dependency hash-locked · benchmark v1.2.2</p>
+
+  <h2>Course rules (TA canvas)</h2>
+  <ul class="tight">
+    <li>Charge jobs to <code>cmsc848n-class</code> and use one A100 (<code>make.sh</code> does both)</li>
+    <li>No H100s or multi-GPU without a reason; ask the TAs about big jobs</li>
+    <li>No heavy work on login nodes; compute nodes have no Internet</li>
+    <li>Use the shared weights; don't download your own copy</li>
+  </ul>
+
+  <h2>If something breaks</h2>
+  <ul class="tight">
+    <li>vLLM won't start: check the end of <code>vllm.log</code> in the run folder</li>
+    <li>Out of GPU memory: <code>MAX_MODEL_LEN=16384 ./make.sh smoke</code></li>
+        <li>Off Zaratan: Docker + a ≥40 GB NVIDIA GPU, then <code>./make.sh all</code></li>
+  </ul>
+</div>
+</div>
+</body>
+</html>

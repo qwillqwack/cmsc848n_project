@@ -1,0 +1,11 @@
+# Apptainer twin of the Dockerfile, for Zaratan (no Docker there). make.sh passes VLLM_IMAGE
+# from the Dockerfile's ARG line, and both recipes run the same install script.
+Bootstrap: docker
+From: {{ VLLM_IMAGE }}
+
+%files
+    docker/agentdojo.lock.txt /opt/cmsc848n/agentdojo.lock.txt
+    docker/install_agentdojo.sh /opt/cmsc848n/install_agentdojo.sh
+
+%post
+    bash /opt/cmsc848n/install_agentdojo.sh
