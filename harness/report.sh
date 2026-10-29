@@ -20,7 +20,7 @@ for d in "${dirs[@]}"; do
       sacct -j "$job" -X -n -o JobID,State,Elapsed | sed 's/^/   slurm: /'
     fi
   fi
-  echo; python3 docker/summarize.py "$d"
+  echo; python3 cluster/docker/summarize.py "$d"
   echo; python3 harness/analyze_runs.py "$d"
   echo; python3 harness/show_run.py "$d"
   echo

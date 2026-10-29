@@ -31,16 +31,16 @@
 </head>
 <body>
 <h1>Qwen3.8-27B + AgentDojo on Zaratan: setup</h1>
-<p class="sub">CMSC848N · Research Group 05 · from Ishaan · Oct 21, 2026. One script self-hosts Qwen3.8-27B with vLLM and runs the AgentDojo prompt-injection suite against it. Every version is pinned, so we all get the same numbers.</p>
+<p class="sub">CMSC848N · Research Group 05 · from Ishaan · Oct 21, 2026, updated Oct 29. One script self-hosts Qwen3.8-27B with vLLM and runs the AgentDojo prompt-injection suite against it. Every version is pinned, so we all get the same numbers.</p>
 
 <div class="blockers">
-  <h2>Current blockers (Wed Oct 21, 11:47 AM)</h2>
+  <h2>Status (Thu Oct 29)</h2>
   <ul>
-    <li><b>A100 queue:</b> 1,457 jobs pending, 66 running; Slurm's estimated start for a new 1× A100 job is <b>Nov 9</b>, after the midterm report is due (Nov 1). Ishaan's banking smoke test is queued on an A100 (<b>job 23429642</b>) and an H100 (<b>job 23429974</b>); whichever starts first runs and cancels the other. <b>Don't queue another.</b></li>
-    <li><b>H100 queue:</b> 57 pending, estimated start <b>Oct 28</b>, though short jobs often start much sooner (a 2-minute test started in under a minute). The course rules say H100s only when the project needs them; given the deadline Ishaan queued one 30-minute H100 smoke test (≤72 SU). <b>Ask the TAs at Friday's office hours (11–12)</b> before any longer H100 run.</li>
-    <li><b>Not validated end to end yet:</b> the smoke test hasn't run, because it's waiting for a GPU. Everything up to the GPU is checked: the image builds and reports the pinned versions (vLLM 0.32.0, AgentDojo 0.1.35), and the weights are complete. The first GPU run is what proves the FP8 model fits a 40 GB A100.</li>
+    <li><b>Validated end to end</b> on one A100: the smoke test, the Banking baselines (thinking low and off), the tool filter, delimiting and repeat-prompt defenses, and the custom attacks (<code>./make.sh attack</code>). One run takes 14 min to 1 h 23 min.</li>
+    <li><b>Read before you queue:</b> every run so far is in the shared <code>runs/</code> folder. Check there first so nobody spends SU on a duplicate.</li>
+    <li><b>Not in the image yet:</b> the ProtectAI detector defense (<code>transformers_pi_detector</code>) needs an image rebuild.</li>
   </ul>
-  <p class="note">The estimates are Slurm's worst-case projections and move as jobs finish; short jobs can start early by fitting into gaps. Class allocation: 63k of 100k SU left.</p>
+  <p class="note">Class allocation: 33k of 100k SU left, shared with the other groups.</p>
 </div>
 
 <div class="cols">
@@ -50,11 +50,11 @@
     <li><b>Check access.</b> Log in with your UMD password + Duo, then check that <code>cmsc848n-class</code> is listed:
       <pre>ssh &lt;directory-id&gt;@login.zaratan.umd.edu
 sbalance</pre></li>
-    <li><b>Copy the files over</b> (from your laptop), then unzip on Zaratan:
-      <pre>scp cmsc848n-agentdojo.zip \
-    &lt;directory-id&gt;@login.zaratan.umd.edu:scratch/
-cd ~/scratch &amp;&amp; unzip cmsc848n-agentdojo.zip
-cd cmsc848n_project</pre></li>
+    <li><b>Get the scripts</b> (on Zaratan; the scripts live in <code>cluster/</code>):
+      <pre>cd ~/scratch
+git clone -b cluster \
+https://github.com/qwillqwack/cmsc848n_project.git
+cd cmsc848n_project/cluster</pre></li>
     <li><b>Setup</b> (on the login node). It finds the group's shared image and weights and returns in seconds:
       <pre>./make.sh setup</pre></li>
     <li><b>Smoke test:</b> one GPU job, up to 30 min (≤24 SU on an A100). Banking: pay a bill, total March spending, then the bill payment again with an injection hidden in the bill. Checks that tool calling works end to end.

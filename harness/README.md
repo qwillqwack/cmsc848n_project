@@ -11,8 +11,8 @@
 
 Run (Zaratan, login node):
 
-    ./make.sh attack                     # A100, <= 45 min; settings: ATTACKS, ATTACK_USER_TASKS, INJECTION_TASKS
-    ./make.sh results                    # per-attack table
+    cluster/make.sh attack                   # A100, <= 45 min; settings: ATTACKS, ATTACK_USER_TASKS, INJECTION_TASKS
+    cluster/make.sh results                  # per-attack table
     python3 harness/analyze_runs.py "$(ls -td /scratch/zt1/project/cmsc848n/shared/proj05_agentdojo/runs/2*attack*/ | head -1)"
 
 `data/shared_tool_pairs_v1.2.2.csv`: T1's shared-tool flag per (suite, user task, injection task); `analyze_runs.py` uses it to report ASR on the shared-tool subset.
@@ -21,7 +21,7 @@ Run (Zaratan, login node):
     python3 harness/show_run.py <run dir> -u user_task_12 -a argswap_notice
 
 Defenses (Workstream A task 5, table T2): `DEFENSE=tool_filter | spotlighting_with_delimiting | repeat_user_prompt`
-works with `baseline` and `attack`, e.g. `THINKING=off DEFENSE=tool_filter ./make.sh baseline`. With
+works with `baseline` and `attack`, e.g. `THINKING=off DEFENSE=tool_filter cluster/make.sh baseline`. With
 `tool_filter`, vLLM also serves the name `vllm_parsed`, because AgentDojo 0.1.35's filter asks for that name.
 
 Note: AgentDojo 0.1.35 sends no temperature for the agent's own calls (`temperature or NOT_GIVEN` drops 0.0),

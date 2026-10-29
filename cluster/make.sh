@@ -39,6 +39,7 @@ set -euo pipefail
 shopt -s inherit_errexit 2>/dev/null || true # bash 4.4+: keep set -e inside $(...)
 cd "$(dirname "$0")"
 REPO=$PWD
+ROOT=$(dirname "$REPO") # repo root, which holds harness/
 
 ACCOUNT=cmsc848n-class
 PROFILE=${PROFILE:-a100}
@@ -119,7 +120,7 @@ run_in_image() {
       ATTACKS INJECTION_TASKS ATTACK_USER_TASKS MODULES DEFENSE; do
       if [ -n "${!v:-}" ]; then envs+=(-e "$v=${!v}"); fi
     done
-    docker run --rm ${gpu:+--gpus all --ipc=host} -v "$REPO:$REPO" -v "$SHARED:$SHARED" -w "$REPO" \
+    docker run --rm ${gpu:+--gpus all --ipc=host} -v "$ROOT:$ROOT" -v "$SHARED:$SHARED" -w "$REPO" \
       ${envs[@]+"${envs[@]}"} "$IMAGE" "$@"
   fi
 }
@@ -222,7 +223,7 @@ step_run() { # step_run smoke|baseline (on the GPU node)
   if [ "$1" = attack ]; then
     local code_dir="$OUT/code/$(date +%Y%m%d-%H%M%S)" # one copy per job, so a top-up keeps the first copy
     mkdir -p "$code_dir"
-    cp harness/*.py docker/run_baseline.sh docker/summarize.py "$code_dir/"
+    cp "$ROOT"/harness/*.py docker/run_baseline.sh docker/summarize.py "$code_dir/"
   fi
   echo "run dir: $OUT"
   run_in_image --gpu bash docker/run_baseline.sh

@@ -33,7 +33,7 @@ esac
 # id, so serve that name too when the tool filter is on (other runs stay exactly as before).
 served=(qwen3.8-27b)
 if [ "$DEFENSE" = tool_filter ]; then served+=(vllm_parsed); fi
-HARNESS="$(cd "$(dirname "$0")/.." && pwd)/harness" # put on AgentDojo's PYTHONPATH only, not vLLM's
+HARNESS="$(cd "$(dirname "$0")/../.." && pwd)/harness" # put on AgentDojo's PYTHONPATH only, not vLLM's
 
 case "$THINKING" in
   off) template_kwargs='{"enable_thinking": false}' ;;

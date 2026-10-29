@@ -2,15 +2,15 @@
 
 ## AgentDojo baseline on Qwen3.8-27B
 
-`Dockerfile` + `make.sh` set up a self-hosted Qwen3.8-27B (vLLM) and run the AgentDojo
+`cluster/Dockerfile` + `cluster/make.sh` set up a self-hosted Qwen3.8-27B (vLLM) and run the AgentDojo
 prompt-injection suite against it. Everything is pinned: the vLLM image by digest, the model by
-Hugging Face commit, AgentDojo and its dependencies by hash (`docker/agentdojo.lock.txt`).
+Hugging Face commit, AgentDojo and its dependencies by hash (`cluster/docker/agentdojo.lock.txt`).
 
 On Zaratan, from a login node:
 
 ```bash
-git clone https://github.com/qwillqwack/cmsc848n_project.git ~/scratch/cmsc848n_project
-cd ~/scratch/cmsc848n_project
+git clone -b cluster https://github.com/qwillqwack/cmsc848n_project.git ~/scratch/cmsc848n_project
+cd ~/scratch/cmsc848n_project/cluster
 ./make.sh all       # download, then pack -> smoke -> baseline as chained Slurm jobs
 ./make.sh status    # queue + newest run's logs
 ./make.sh results   # per-suite utility and attack success rate
@@ -32,15 +32,14 @@ settings (thinking effort, context length, walltime).
 
 | Path | What it is |
 |---|---|
-| `make.sh`, `Dockerfile`, `apptainer.def`, `docker/` | The runnable pipeline (Ishaan): self-hosted Qwen3.8-27B + AgentDojo on Zaratan |
+| `cluster/` | The runnable pipeline (Ishaan): `make.sh`, `Dockerfile`, `apptainer.def`, `docker/` and the setup guide (`SETUP.pdf`) for self-hosted Qwen3.8-27B + AgentDojo on Zaratan |
 | `harness/` | Workstream A additions: custom attacks, run analysis, GPU-free checks (see `harness/README.md`) |
-| `docs/` | Setup guide (SETUP.pdf) |
 | `agentdojo-security-research/` | Project template for the defense (B) and attack (C) workstreams |
 
 ## Workstream A additions
 
-- `./make.sh attack`: our custom argument-hijacking attacks on Banking
-- `DEFENSE=tool_filter | spotlighting_with_delimiting | repeat_user_prompt ./make.sh baseline` (or `attack`): add an AgentDojo built-in defense
-- `THINKING=off ./make.sh ...`: turn the model's reasoning off
+- `cluster/make.sh attack`: our custom argument-hijacking attacks on Banking
+- `DEFENSE=tool_filter | spotlighting_with_delimiting | repeat_user_prompt cluster/make.sh baseline` (or `attack`): add an AgentDojo built-in defense
+- `THINKING=off cluster/make.sh ...`: turn the model's reasoning off
 - `harness/report.sh`: summary of the newest runs; `python3 harness/show_run.py <run folder>` to read a run's conversations
 - `harness/preflight_defenses.sh`, `harness/preflight_attacks.py`: checks that need no GPU; run them on a login node before submitting
