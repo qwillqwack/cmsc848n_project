@@ -3,3 +3,16 @@ dist/
 report-*.txt
 *.zip
 *.tgz
+
+# local only: notes and the midterm draft (has the Overleaf link); setup docs stay tracked
+docs/*
+!docs/SETUP.pdf
+!docs/setup.html
+
+# local copies of Zaratan run traces, and the local cluster board
+data/
+board/
+.DS_Store
+.venv/
+__pycache__/
+.ipynb_checkpoints/
