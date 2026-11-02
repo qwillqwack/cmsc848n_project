@@ -50,6 +50,11 @@ def show(d, width):
     print("utility={} hijacked={} error={} duration={:.0f}s".format(
         d.get("utility"), d.get("security"), d.get("error"), d.get("duration") or 0))
     print("file:", d["_path"])
+    decisions = {x["call_index"]: x for x in d.get("wsa_decisions", [])}
+    if "wsa_checker" in d:
+        print("checker:", ",".join(d["wsa_checker"].get("checker", [])),
+              "| {} checked call(s), {} blocked".format(len(decisions), sum(x["applied"] == "block" for x in decisions.values())))
+    call_index = 0
     for i, m in enumerate(d["messages"]):
         role = m["role"].upper()
         body = text(m).strip()
@@ -64,8 +69,17 @@ def show(d, width):
         print("\n[{}] {}".format(i, role))
         if body:
             print("    " + body.replace("\n", "\n    "))
+        if m["role"] == "tool" and m.get("error"):
+            print("    ERROR shown to the agent: " + m["error"])
         for t in (m.get("tool_calls") or []):
             print("    -> CALL {}({})".format(t["function"], json.dumps(t.get("args") or {})))
+            x = decisions.get(call_index)
+            if x:
+                print("       checker: {} -> applied {}{}{}".format(
+                    x["decision"], x["applied"], " by " + x["by"] if x.get("by") else "",
+                    " ({})".format(x["reason"]) if x.get("reason") else ""))
+                print("       where each value came from: {}".format(json.dumps(x.get("arg_sources"))))
+            call_index += 1
     print()
 
 
