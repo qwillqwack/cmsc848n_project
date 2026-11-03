@@ -34,6 +34,16 @@ esac
 served=(qwen3.8-27b)
 if [ "$DEFENSE" = tool_filter ]; then served+=(vllm_parsed); fi
 HARNESS="$(cd "$(dirname "$0")/.." && pwd)/harness" # put on AgentDojo's PYTHONPATH only, not vLLM's
+# Workstream B's checkers and provenance code (judge/), when present, so WSA_CHECKER can name them
+JUDGE="$(cd "$(dirname "$0")/.." && pwd)/judge"
+AD_PATH=$HARNESS
+if [ -d "$JUDGE" ]; then AD_PATH="$HARNESS:$JUDGE"; fi
+# The middleware (harness/wsa_middleware.py) is loaded in every run: it logs model-call cost always and
+# checks gated calls when WSA_CHECKER is set (make.sh sets WSA_* from CHECKER, BLOCK_MESSAGE, ...).
+if [ -n "${WSA_CHECKER:-}" ] && [ ! -d "$JUDGE" ]; then
+  echo "WSA_CHECKER needs Workstream B's judge/ folder next to harness/ (not found: $JUDGE)" >&2
+  exit 2
+fi
 
 case "$THINKING" in
   off) template_kwargs='{"enable_thinking": false}' ;;
@@ -84,8 +94,9 @@ echo "vLLM is up"
 bench() {
   local kind=$1 log=$2
   shift 2
-  PYTHONPATH="$HARNESS" LOCAL_LLM_PORT=$PORT /opt/agentdojo/bin/python -m agentdojo.scripts.benchmark \
+  PYTHONPATH="$AD_PATH" LOCAL_LLM_PORT=$PORT /opt/agentdojo/bin/python -m agentdojo.scripts.benchmark \
     --model VLLM_PARSED --benchmark-version "$BENCHMARK_VERSION" ${DEFENSE:+--defense "$DEFENSE"} \
+    --module-to-load wsa_middleware \
     --logdir "$OUT/runs/$kind${LOGSUB:+/$LOGSUB}" "$@" >>"$OUT/$log.log" 2>&1
 }
 
