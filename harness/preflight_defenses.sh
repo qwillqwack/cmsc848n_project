@@ -3,7 +3,8 @@
 # CLI from the image on Banking user_task_0, once per defense, against harness/fake_openai_server.py.
 #   harness/preflight_defenses.sh
 # The PI detector cases need the ProtectAI weights in the shared HF cache (harness/README.md); they run
-# the detector on CPU exactly as run_baseline.sh does, once on the clean bill and once under attack.
+# the detector on CPU exactly as run_baseline.sh does: on the clean bill (must pass), under a blatant
+# 'ignore your previous instructions' injection (must be redacted), and under the stock attack (reported).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 SIF=${SIF:-/scratch/zt1/project/cmsc848n/shared/proj05_agentdojo/images/agentdojo-7995ab7c1c2b.sif}
@@ -37,6 +38,8 @@ case_env=(PYTHONPATH="$PWD/harness" HF_HOME="$SHARED/hf" HF_HUB_OFFLINE=1 TRANSF
   WSA_EXTRA_SITE=/usr/local/lib/python3.12/dist-packages CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=2)
 run_case pi_detector_clean transformers_pi_detector qwen3.8-27b --module-to-load wsa_middleware
 run_case pi_detector_attack transformers_pi_detector qwen3.8-27b --module-to-load wsa_middleware \
+  --attack ignore_previous --injection-task injection_task_0
+run_case pi_detector_stock transformers_pi_detector qwen3.8-27b --module-to-load wsa_middleware \
   --attack important_instructions --injection-task injection_task_0
 case_env=()
 echo
