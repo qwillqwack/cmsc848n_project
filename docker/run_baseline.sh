@@ -23,12 +23,25 @@ MODULES=${MODULES:-wsa_attacks}
 DEFENSE=${DEFENSE:-}
 case "$DEFENSE" in
   "" | tool_filter | spotlighting_with_delimiting | repeat_user_prompt) ;;
-  transformers_pi_detector)
-    echo "DEFENSE=transformers_pi_detector needs torch + transformers in /opt/agentdojo and the ProtectAI" >&2
-    echo "weights in \$HF_HOME; neither is in image 7995ab7c1c2b yet" >&2
-    exit 2 ;;
+  transformers_pi_detector) ;; # see the PI detector block below
   *) echo "unknown DEFENSE '$DEFENSE'" >&2; exit 2 ;;
 esac
+# ProtectAI PI detector, without an image rebuild: AgentDojo's venv borrows torch + transformers from the
+# image's system Python (same 3.12.3; harness/wsa_middleware.py, "ProtectAI PI detector"). The classifier
+# runs on CPU, so it doesn't compete with vLLM for GPU memory. The weights must already be in $HF_HOME
+# (compute nodes are offline), at the pinned snapshot.
+PI_MODEL=protectai/deberta-v3-base-prompt-injection-v2
+PI_REVISION=90c9989b1a342275dd0d1a95aad283c04e075671
+pi_env=()
+if [ "$DEFENSE" = transformers_pi_detector ]; then
+  pi_ref="$HF_HOME/hub/models--${PI_MODEL//\//--}/refs/main"
+  if [ "$(cat "$pi_ref" 2>/dev/null)" != "$PI_REVISION" ]; then
+    echo "DEFENSE=transformers_pi_detector needs $PI_MODEL at $PI_REVISION in \$HF_HOME ($pi_ref);" >&2
+    echo "download it on a login node (harness/README.md, PI detector)" >&2
+    exit 2
+  fi
+  pi_env=(WSA_EXTRA_SITE=/usr/local/lib/python3.12/dist-packages CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=2)
+fi
 # AgentDojo 0.1.35's tool filter calls the model by the config name ("vllm_parsed"), not by the served
 # id, so serve that name too when the tool filter is on (other runs stay exactly as before).
 served=(qwen3.8-27b)
@@ -94,7 +107,7 @@ echo "vLLM is up"
 bench() {
   local kind=$1 log=$2
   shift 2
-  PYTHONPATH="$AD_PATH" LOCAL_LLM_PORT=$PORT /opt/agentdojo/bin/python -m agentdojo.scripts.benchmark \
+  env ${pi_env[@]+"${pi_env[@]}"} PYTHONPATH="$AD_PATH" LOCAL_LLM_PORT=$PORT /opt/agentdojo/bin/python -m agentdojo.scripts.benchmark \
     --model VLLM_PARSED --benchmark-version "$BENCHMARK_VERSION" ${DEFENSE:+--defense "$DEFENSE"} \
     --module-to-load wsa_middleware \
     --logdir "$OUT/runs/$kind${LOGSUB:+/$LOGSUB}" "$@" >>"$OUT/$log.log" 2>&1

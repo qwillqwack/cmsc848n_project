@@ -379,6 +379,14 @@ def checker_and_cost(run):
               "{:.1f} s agent time/run".format(n_runs, len(llm) / n_runs, tf, pt / n_runs, ct / n_runs,
                                                lat / len(llm), dur / n_runs))
         print("(GPU time per job: see the Slurm line in harness/report.sh)")
+    pi = [(bool(d.get("attack_type")), x) for d in traces for x in d.get("wsa_pi_detections", [])]
+    if pi:  # DEFENSE=transformers_pi_detector: a redacted output in a benign run is a false positive
+        print("\nPI detector: tool outputs checked / redacted")
+        for name, attacked in [("attacked runs", True), ("benign runs", False)]:
+            xs = [x for a, x in pi if a == attacked]
+            if xs:
+                print("  {:<14} {} / {}  ({:.3f} s per check)".format(
+                    name, len(xs), sum(x["is_injection"] for x in xs), sum(x["latency_s"] for x in xs) / len(xs)))
 
 
 if __name__ == "__main__":

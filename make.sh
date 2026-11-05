@@ -34,8 +34,9 @@
 #   CHECKER            baseline/attack: Workstream B checker chain for the middleware, comma-separated
 #                      module:function (e.g. score_rules:banking_rule_decision); empty = no checking.
 #                      CHECKER_THRESHOLD (0.5), BLOCK_MESSAGE (generic | detailed), ASK_POLICY (block | allow)
-#   DEFENSE            baseline/attack: tool_filter | spotlighting_with_delimiting | repeat_user_prompt
-#                      (empty = no defense; transformers_pi_detector needs an image rebuild)
+#   DEFENSE            baseline/attack: tool_filter | spotlighting_with_delimiting | repeat_user_prompt |
+#                      transformers_pi_detector (empty = no defense). The PI detector needs the ProtectAI
+#                      weights in the shared HF cache first (harness/README.md, "PI detector")
 #   SHARED             where the image, weights and runs live (Zaratan default: the class's
 #                      shared scratch, so the group keeps one copy of the 31 GB weights)
 set -euo pipefail
@@ -65,9 +66,8 @@ fi
 export WSA_CHECKER=$CHECKER WSA_THRESHOLD=$CHECKER_THRESHOLD WSA_BLOCK_MESSAGE=$BLOCK_MESSAGE WSA_ASK_POLICY=$ASK_POLICY
 DEFENSE=${DEFENSE:-}
 case "$DEFENSE" in # checked again inside the job; failing here saves a queue wait
-  "" | tool_filter | spotlighting_with_delimiting | repeat_user_prompt) ;;
-  transformers_pi_detector) echo "DEFENSE=transformers_pi_detector needs an image rebuild (torch, transformers, weights)" >&2; exit 2 ;;
-  *) echo "DEFENSE must be empty, tool_filter, spotlighting_with_delimiting or repeat_user_prompt (got '$DEFENSE')" >&2; exit 2 ;;
+  "" | tool_filter | spotlighting_with_delimiting | repeat_user_prompt | transformers_pi_detector) ;;
+  *) echo "DEFENSE must be empty, tool_filter, spotlighting_with_delimiting, repeat_user_prompt or transformers_pi_detector (got '$DEFENSE')" >&2; exit 2 ;;
 esac
 BENCHMARK_VERSION=v1.2.2
 # FP8 for both profiles, so there is a single copy of the weights. A100s have no FP8 units;
@@ -107,6 +107,11 @@ fi
 RUNS=$SHARED/runs
 CACHE=$SHARED/cache/$USER # compile caches, per user so nobody trips over someone else's files
 export HF_HOME=$SHARED/hf XDG_CACHE_HOME=$CACHE TRITON_CACHE_DIR=$CACHE/triton
+# the PI detector's weights (downloaded on a login node; run_baseline.sh checks the pinned snapshot)
+PI_REF=$HF_HOME/hub/models--protectai--deberta-v3-base-prompt-injection-v2/refs/main
+if [ "$DEFENSE" = transformers_pi_detector ] && [ ! -f "$PI_REF" ]; then
+  echo "DEFENSE=transformers_pi_detector: no ProtectAI weights in $HF_HOME (see harness/README.md, PI detector)" >&2; exit 2
+fi
 umask 002 # group-writable, so teammates can reuse the image, weights and runs
 
 die() { echo "$*" >&2; exit 1; }
@@ -233,6 +238,7 @@ step_run() { # step_run smoke|baseline (on the GPU node)
     if [ "$1" = attack ]; then
       for v in ATTACKS INJECTION_TASKS ATTACK_USER_TASKS MODULES; do echo "$v=\"${!v}\""; done
     fi
+    if [ "$DEFENSE" = transformers_pi_detector ]; then echo "PI_DETECTOR_REVISION=$(cat "$PI_REF" 2>/dev/null)"; fi
   } >>"$OUT/config.env"
   # keep the run's own copy of the attack/middleware code and scripts, so the run can be rebuilt later
   if [ "$1" = attack ] || [ -n "$CHECKER" ]; then

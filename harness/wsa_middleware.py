@@ -12,6 +12,8 @@ loads it). Configured by environment variables, because the CLI's --defense list
   WSA_ASK_POLICY       what an "ask" becomes, since no user is there to answer: "block" (default) or "allow"
   WSA_ON_ERROR         if a checker raises: "block" (default) or "allow"
   WSA_COST_LOG         "1" (default) records tokens and latency of every model call in the trace
+  WSA_EXTRA_SITE       set by run_baseline.sh for DEFENSE=transformers_pi_detector: where the image's
+                       torch + transformers live (see "ProtectAI PI detector" below)
 
 What a checker sees: one row in Workstream B's format (judge/build_dataset.py), built from the live
 conversation exactly as build_dataset.py builds it from a saved trace:
@@ -32,6 +34,7 @@ What lands in each AgentDojo trace JSON (extra top-level keys):
   wsa_decisions   one entry per checked call: call, arg_sources, per-stage results, final decision,
                   what was applied, checker latency
   wsa_llm_calls   one entry per model call: purpose (agent / tool_filter), tokens, latency
+  wsa_pi_detections  (PI detector runs) one entry per tool output checked: verdict, score, time
 A blocked call is not executed; the agent receives a tool result whose error is the block message.
 """
 import importlib
@@ -305,6 +308,45 @@ def _from_config(cls, config):
 
 
 AgentPipeline.from_config = classmethod(_from_config)
+
+
+# ---------------------------------------------------------------- ProtectAI PI detector -------------
+# DEFENSE=transformers_pi_detector without an image rebuild. AgentDojo's venv (/opt/agentdojo) has no
+# torch or transformers, but the image's system Python, which vLLM uses, has both and is the same
+# interpreter (3.12.3). run_baseline.sh sets WSA_EXTRA_SITE to that site-packages folder. It goes first on
+# sys.path only while the detector loads (transformers needs its own, newer huggingface_hub; the venv's
+# older copy would win otherwise), then moves to the end, so AgentDojo keeps its own versions of
+# everything it had already loaded. A warm-up call triggers transformers' lazy imports while the folder
+# is still first. Each detector call (score, verdict, time) is stored in the trace as wsa_pi_detections.
+# Detector settings are AgentDojo's own (agent_pipeline.py): threshold 0.5, mode "message", redact.
+
+def _patch_pi_detector(site):
+    from agentdojo.agent_pipeline import pi_detector  # noqa: PLC0415
+
+    cls = pi_detector.TransformersBasedPIDetector
+    init, detect = cls.__init__, cls.detect
+
+    def __init__(self, *args, **kwargs):
+        sys.path.insert(0, site)
+        try:
+            init(self, *args, **kwargs)
+            detect(self, "warm-up")
+        finally:
+            sys.path.remove(site)
+            sys.path.append(site)
+
+    def _detect(self, tool_output):
+        t0 = time.time()
+        is_injection, score = detect(self, tool_output)
+        _record("wsa_pi_detections", {"is_injection": bool(is_injection), "safety_score": float(score),
+                                      "chars": len(tool_output), "latency_s": round(time.time() - t0, 4)})
+        return is_injection, score
+
+    cls.__init__, cls.detect = __init__, _detect
+
+
+if os.environ.get("WSA_EXTRA_SITE"):
+    _patch_pi_detector(os.environ["WSA_EXTRA_SITE"])
 
 
 # ---------------------------------------------------------------- demo checkers ---------------------
