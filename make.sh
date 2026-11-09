@@ -31,8 +31,12 @@
 #                      important_instructions); INJECTION_TASKS (default injection_task_100);
 #                      ATTACK_USER_TASKS (default: the 10 Banking tasks in harness/wsa_attacks.py);
 #                      MODULES (default wsa_attacks, from harness/)
-#   DEFENSE            baseline/attack: tool_filter | spotlighting_with_delimiting | repeat_user_prompt
-#                      (empty = no defense; transformers_pi_detector needs an image rebuild)
+#   CHECKER            baseline/attack: Workstream B checker chain for the middleware, comma-separated
+#                      module:function (e.g. score_rules:banking_rule_decision); empty = no checking.
+#                      CHECKER_THRESHOLD (0.5), BLOCK_MESSAGE (generic | detailed), ASK_POLICY (block | allow)
+#   DEFENSE            baseline/attack: tool_filter | spotlighting_with_delimiting | repeat_user_prompt |
+#                      transformers_pi_detector (empty = no defense). The PI detector needs the ProtectAI
+#                      weights in the shared HF cache first (harness/README.md, "PI detector")
 #   SHARED             where the image, weights and runs live (Zaratan default: the class's
 #                      shared scratch, so the group keeps one copy of the 31 GB weights)
 set -euo pipefail
@@ -49,11 +53,21 @@ ATTACKS=${ATTACKS:-argswap_notice argswap_policy important_instructions}
 INJECTION_TASKS=${INJECTION_TASKS:-injection_task_100}
 ATTACK_USER_TASKS=${ATTACK_USER_TASKS:-user_task_0 user_task_2 user_task_3 user_task_4 user_task_5 user_task_6 user_task_9 user_task_11 user_task_12 user_task_15}
 MODULES=${MODULES:-wsa_attacks}
+CHECKER=${CHECKER:-}
+CHECKER_THRESHOLD=${CHECKER_THRESHOLD:-0.5}
+BLOCK_MESSAGE=${BLOCK_MESSAGE:-generic}
+ASK_POLICY=${ASK_POLICY:-block}
+case "$BLOCK_MESSAGE" in generic | detailed) ;; *) echo "BLOCK_MESSAGE must be generic or detailed" >&2; exit 2 ;; esac
+case "$ASK_POLICY" in block | allow) ;; *) echo "ASK_POLICY must be block or allow" >&2; exit 2 ;; esac
+if [ -n "$CHECKER" ] && [ ! -d "$REPO/judge" ]; then
+  echo "CHECKER needs Workstream B's judge/ folder in this checkout ($REPO/judge)" >&2; exit 2
+fi
+# the middleware reads these inside the job (apptainer passes the environment through)
+export WSA_CHECKER=$CHECKER WSA_THRESHOLD=$CHECKER_THRESHOLD WSA_BLOCK_MESSAGE=$BLOCK_MESSAGE WSA_ASK_POLICY=$ASK_POLICY
 DEFENSE=${DEFENSE:-}
 case "$DEFENSE" in # checked again inside the job; failing here saves a queue wait
-  "" | tool_filter | spotlighting_with_delimiting | repeat_user_prompt) ;;
-  transformers_pi_detector) echo "DEFENSE=transformers_pi_detector needs an image rebuild (torch, transformers, weights)" >&2; exit 2 ;;
-  *) echo "DEFENSE must be empty, tool_filter, spotlighting_with_delimiting or repeat_user_prompt (got '$DEFENSE')" >&2; exit 2 ;;
+  "" | tool_filter | spotlighting_with_delimiting | repeat_user_prompt | transformers_pi_detector) ;;
+  *) echo "DEFENSE must be empty, tool_filter, spotlighting_with_delimiting, repeat_user_prompt or transformers_pi_detector (got '$DEFENSE')" >&2; exit 2 ;;
 esac
 BENCHMARK_VERSION=v1.2.2
 # FP8 for both profiles, so there is a single copy of the weights. A100s have no FP8 units;
@@ -93,6 +107,11 @@ fi
 RUNS=$SHARED/runs
 CACHE=$SHARED/cache/$USER # compile caches, per user so nobody trips over someone else's files
 export HF_HOME=$SHARED/hf XDG_CACHE_HOME=$CACHE TRITON_CACHE_DIR=$CACHE/triton
+# the PI detector's weights (downloaded on a login node; run_baseline.sh checks the pinned snapshot)
+PI_REF=$HF_HOME/hub/models--protectai--deberta-v3-base-prompt-injection-v2/refs/main
+if [ "$DEFENSE" = transformers_pi_detector ] && [ ! -f "$PI_REF" ]; then
+  echo "DEFENSE=transformers_pi_detector: no ProtectAI weights in $HF_HOME (see harness/README.md, PI detector)" >&2; exit 2
+fi
 umask 002 # group-writable, so teammates can reuse the image, weights and runs
 
 die() { echo "$*" >&2; exit 1; }
@@ -116,7 +135,8 @@ run_in_image() {
     for v in HF_HOME XDG_CACHE_HOME TRITON_CACHE_DIR HF_HUB_OFFLINE TRANSFORMERS_OFFLINE \
       VLLM_NO_USAGE_STATS DO_NOT_TRACK MODE OUT MODEL MODEL_REVISION THINKING MAX_MODEL_LEN \
       GPU_MEM_UTIL MAX_NUM_SEQS ENFORCE_EAGER BENCHMARK_VERSION SUITES SHARDS \
-      ATTACKS INJECTION_TASKS ATTACK_USER_TASKS MODULES DEFENSE; do
+      ATTACKS INJECTION_TASKS ATTACK_USER_TASKS MODULES DEFENSE \
+      WSA_CHECKER WSA_THRESHOLD WSA_BLOCK_MESSAGE WSA_ASK_POLICY WSA_COST_LOG; do  # docker: pass these through
       if [ -n "${!v:-}" ]; then envs+=(-e "$v=${!v}"); fi
     done
     docker run --rm ${gpu:+--gpus all --ipc=host} -v "$REPO:$REPO" -v "$SHARED:$SHARED" -w "$REPO" \
@@ -200,7 +220,7 @@ step_run() { # step_run smoke|baseline (on the GPU node)
   [ -d "$(weights_dir)" ] || die "no weights at $(weights_dir); run ./make.sh setup first"
   export MODE=$1 MODEL MODEL_REVISION THINKING MAX_MODEL_LEN GPU_MEM_UTIL MAX_NUM_SEQS ENFORCE_EAGER \
     BENCHMARK_VERSION SUITES SHARDS ATTACKS INJECTION_TASKS ATTACK_USER_TASKS MODULES DEFENSE HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1
-  export OUT=${RUN_DIR:-$RUNS/$(date +%Y%m%d-%H%M%S)-$MODE-$PROFILE-think-$THINKING${DEFENSE:+-$DEFENSE}}
+  export OUT=${RUN_DIR:-$RUNS/$(date +%Y%m%d-%H%M%S)-$MODE-$PROFILE-think-$THINKING${DEFENSE:+-$DEFENSE}${CHECKER:+-checked}}
   mkdir -p "$OUT"
   local commit=unknown v
   if git rev-parse -q HEAD >/dev/null 2>&1; then
@@ -211,18 +231,24 @@ step_run() { # step_run smoke|baseline (on the GPU node)
     echo "GIT_COMMIT=$commit"
     echo "SLURM_JOB_ID=${SLURM_JOB_ID:-}"
     for v in PROFILE MODE MODEL MODEL_REVISION THINKING MAX_MODEL_LEN GPU_MEM_UTIL MAX_NUM_SEQS \
-      ENFORCE_EAGER BENCHMARK_VERSION SUITES SHARDS VLLM_IMAGE IMAGE_HASH DEFENSE; do
+      ENFORCE_EAGER BENCHMARK_VERSION SUITES SHARDS VLLM_IMAGE IMAGE_HASH DEFENSE \
+      CHECKER CHECKER_THRESHOLD BLOCK_MESSAGE ASK_POLICY; do
       echo "$v=${!v}"
     done
     if [ "$1" = attack ]; then
       for v in ATTACKS INJECTION_TASKS ATTACK_USER_TASKS MODULES; do echo "$v=\"${!v}\""; done
     fi
+    if [ "$DEFENSE" = transformers_pi_detector ]; then echo "PI_DETECTOR_REVISION=$(cat "$PI_REF" 2>/dev/null)"; fi
   } >>"$OUT/config.env"
-  # keep the run's own copy of the attack code and scripts, so the run can be rebuilt from a zip checkout
-  if [ "$1" = attack ]; then
+  # keep the run's own copy of the attack/middleware code and scripts, so the run can be rebuilt later
+  if [ "$1" = attack ] || [ -n "$CHECKER" ]; then
     local code_dir="$OUT/code/$(date +%Y%m%d-%H%M%S)" # one copy per job, so a top-up keeps the first copy
     mkdir -p "$code_dir"
     cp harness/*.py docker/run_baseline.sh docker/summarize.py "$code_dir/"
+  fi
+  if [ -n "$CHECKER" ] && [ -d judge ]; then
+    local jdir="$OUT/code/judge-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$jdir" && cp judge/*.py "$jdir/"
   fi
   echo "run dir: $OUT"
   run_in_image --gpu bash docker/run_baseline.sh
@@ -234,6 +260,9 @@ step_run() { # step_run smoke|baseline (on the GPU node)
 # baseline, e.g. jobs 23547164/5 and 23535007.)
 job_name() {
   local n="agentdojo-$1-think-$THINKING-${DEFENSE:-nodefense}"
+  if [ -n "$CHECKER" ]; then
+    n+="-chk$(printf '%s|%s|%s|%s' "$CHECKER" "$CHECKER_THRESHOLD" "$BLOCK_MESSAGE" "$ASK_POLICY" | cksum | cut -d' ' -f1)"
+  fi
   case "$1" in
     baseline) n+="-${SUITES// /+}" ;;
     attack) n+="-$(printf '%s|%s|%s|%s' "$ATTACKS" "$ATTACK_USER_TASKS" "$INJECTION_TASKS" "$MODULES" | cksum | cut -d' ' -f1)" ;;
