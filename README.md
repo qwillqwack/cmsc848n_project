@@ -34,6 +34,7 @@ settings (thinking effort, context length, walltime).
 |---|---|
 | `make.sh`, `Dockerfile`, `apptainer.def`, `docker/` | The runnable pipeline (Ishaan): self-hosted Qwen3.8-27B + AgentDojo on Zaratan |
 | `harness/` | Workstream A additions: custom attacks, run analysis, GPU-free checks (see `harness/README.md`) |
+| `judge/` | Workstream B: call-level dataset, placeholder rules, zero-shot intent judges (Jev, Qwen), offline evaluation (see `judge/README.md`) |
 | `docs/` | Setup guide (SETUP.pdf) |
 | `agentdojo-security-research/` | Project template for the defense (B) and attack (C) workstreams |
 

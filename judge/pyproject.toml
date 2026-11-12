@@ -1,0 +1,17 @@
+[project]
+name = "judge"
+version = "0.1.0"
+description = "Intent-judge dataset and evaluation for the CMSC848N AgentDojo project"
+requires-python = ">=3.12,<3.13"
+dependencies = ["agentdojo==0.1.35"]
+
+[tool.uv]
+# Same cutoff as docker/agentdojo.lock.txt: newer resolutions pull openai 3.x, which AgentDojo 0.1.35 can't use.
+exclude-newer = "2025-10-28T00:00:00Z"
+package = false
+
+[dependency-groups]
+dev = [
+    "jupyterlab>=4.4.10",
+    "pandas>=2.3.3",
+]
