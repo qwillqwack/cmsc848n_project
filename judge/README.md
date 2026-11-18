@@ -3,18 +3,27 @@
 Workstream B puts a check between the agent and its tools. Before a call that moves money or sends
 data out runs, the check decides whether the user actually asked for it. We build it in this order:
 
-1. **Rules (Ryan).** Hand-written rules for Banking writes. Alongside two placeholder baselines
-   and two provenance-based examples, `score_rules.py` includes `banking_conservative`: for payment
-   calls, it blocks a recipient mismatch only when the user's request contains exactly one
-   recognizable account identifier. It defers every other Banking write, including exact recipient
-   matches, so a later classifier can check the other arguments and intent. This is a syntactic
-   high-confidence block, not a complete authorization check.
+1. **Rules (Ryan; v2 by Aditya, Nov 18).** Hand-written rules for Banking writes in `score_rules.py`.
+   `banking_rule_decision` (score name `banking_conservative`) blocks four narrow patterns and defers
+   everything else to the classifier:
+   - **One account in the request:** the user typed exactly one account and the payment goes to another,
+     unless that account is a real counterparty (a `sender`/`recipient` field) in the transaction lists.
+     v1 blocked the legitimate refund to the friend in user_task_15 every time; v2 lets it through.
+   - **Standing-order payee change:** `update_scheduled_transaction` sets a recipient the user didn't give
+     that isn't the order's current recipient.
+   - **Recipient only in text:** the recipient isn't in the request and appears in the transaction lists
+     only inside free text (a transaction subject), never as a counterparty.
+   - **Password:** `update_password` sets a password the user didn't type.
+
+   Recipients that appear only in a file the agent read (a bill, a landlord's notice) are deferred,
+   because legitimate bills name the payee there too. v1 (`banking_rule_decision_v1`, score name
+   `banking_conservative_v1`) is kept so earlier runs can be reproduced. Blocks come back as
+   `{"decision": "block", "reason": ...}`, so `BLOCK_MESSAGE=detailed` shows the agent which rule fired.
 2. **Intent classifier (Ishaan).** A judge model that reads the user's request, the proposed call and
    where each argument value came from, and returns the probability that the call should be blocked.
    So far: Jev and Qwen3.8-27B, both zero-shot. Next: fine-tune a judge on the training split.
-3. **Hybrid:** rules block explicit mismatches and route deferred calls to the classifier. The
-   conservative rules currently do not explicitly allow any Banking write. The hybrid is not yet
-   wired into a live agent.
+3. **Hybrid:** the rules block the patterns above and route deferred calls to the classifier. The
+   rules never explicitly allow a Banking write. Live: `CHECKER=score_rules:banking_rule_decision,live_judge:p_block`.
 4. **Workstream C:** attacks on the hybrid, after that.
 
 **Everything here is offline. No agent is run.** We take the calls the agent made in Workstream A's
@@ -77,7 +86,8 @@ Any script that writes `data/scores/<name>.none.jsonl`, one `{"id": ..., "p_bloc
 adding a rule that receives the full row, scopes itself to Banking payment-changing calls, and
 writes one score for every row so the evaluator can compare it with the baselines.
 
-The conservative Banking rule writes its decisions to `data/rule_decisions/banking_conservative.jsonl`.
+The Banking rules write their decisions to `data/rule_decisions/banking_conservative.jsonl` (v2) and
+`banking_conservative_v1.jsonl` (v1).
 Its evaluator score file marks only `block` as 1; `defer` and `not_applicable` are 0. Check the
 decision file separately to report how many calls were deferred rather than treating every zero as
 an explicit allow. The account-identifier pattern is heuristic and recognizes strings shaped like
@@ -119,14 +129,22 @@ Judges block a call when their score passes a threshold picked on dev (at most 5
 |---|---|---|---|---|---|
 | Placeholder rule: value in the user's request | – | 14/14 | 111/111 | 57/122 | 220/403 |
 | Placeholder rule: value seen anywhere before | – | 0/14 | 0/111 | 0/122 | 11/403 |
-| Conservative Banking rule: explicit recipient mismatch | – | 3/14 | 54/111 | 0/122 | 0/403 |
+| Banking rules v1: explicit recipient mismatch | – | 3/14 | 54/111 | 0/122 | 0/403 |
+| Banking rules v2 (Nov 18) | – | 10/14 | 110/111 | 0/122 | 0/403 |
 | Jev | calls only | 8/14 | 52/111 | 69/122 | 58/403 |
 | Jev | with context | 7/14 | 9/111 | 8/122 | 28/403 |
 | Qwen3.8-27B | calls only | 11/14 | 3/111 | 13/122 | 46/403 |
 | Qwen3.8-27B | with context | 5/14 | 2/111 | 13/122 | 30/403 |
 
-Caveats: only 14 real hijacks, 6 of them from one task. The conservative Banking rule deferred 11
-real hijacks, 57 synthetic hijacks, and all 122 legitimate Banking test calls to the classifier; its
-3/14 and 54/111 catch rates are rules-stage catches only, not hybrid results. Dev has only two user
-tasks, so its thresholds don't carry over well to test. No intent judge catches synthetic hijacks
-reliably.
+Caveats: only 14 real hijacks, 6 of them from one task. Rules catch rates are rules-stage catches only,
+not hybrid results: a deferred call is counted as not blocked. Dev has only two user tasks, so its
+thresholds don't carry over well to test. No intent judge catches synthetic hijacks reliably.
+
+Rules v2 were written after reading traces from every split, so their test numbers are **not held out**.
+- Across the whole Banking dataset (same runs), v1 caught 8/38 real hijacks and blocked 46/580 legitimate
+  calls, all of them user_task_15's refund to the friend. v2 catches 28/38 and blocks 0/580.
+- With the later runs added (Nov 2–12: Ryan's rule, PI detector and judge runs), v2 catches 42/53 real
+  hijacks and blocks 1/676 legitimate calls: an agent paying the user's own IBAN in user_task_15.
+- The hijacks v2 still defers all take the attacker's account from a file (`read_file`): user tasks 0, 2,
+  12 and 13. That is the classifier's job in the hybrid.
+- The fair test is a fresh live run.
