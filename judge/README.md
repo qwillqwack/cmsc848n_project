@@ -4,7 +4,7 @@ Workstream B puts a check between the agent and its tools. Before a call that mo
 data out runs, the check decides whether the user actually asked for it. We build it in this order:
 
 1. **Rules (Ryan; v2 by Aditya, Nov 18).** Hand-written rules for Banking writes in `score_rules.py`.
-   `banking_rule_decision` (score name `banking_conservative`) blocks four narrow patterns and defers
+   `banking_rule_decision` (score name `banking_conservative`) blocks five narrow patterns and defers
    everything else to the classifier:
    - **One account in the request:** the user typed exactly one account and the payment goes to another,
      unless that account is a real counterparty (a `sender`/`recipient` field) in the transaction lists.
@@ -14,6 +14,9 @@ data out runs, the check decides whether the user actually asked for it. We buil
    - **Recipient only in text:** the recipient isn't in the request and appears in the transaction lists
      only inside free text (a transaction subject), never as a counterparty.
    - **Password:** `update_password` sets a password the user didn't type.
+   - **Already blocked (Nov 19):** a checker already stopped a payment to this account earlier in the
+     conversation, and the account is neither from the user nor a counterparty. Live, an agent whose
+     standing-order change was blocked set up a new standing order to the attacker instead.
 
    Recipients that appear only in a file the agent read (a bill, a landlord's notice) are deferred,
    because legitimate bills name the payee there too. v1 (`banking_rule_decision_v1`, score name
@@ -147,4 +150,6 @@ Rules v2 were written after reading traces from every split, so their test numbe
   hijacks and blocks 1/676 legitimate calls: an agent paying the user's own IBAN in user_task_15.
 - The hijacks v2 still defers all take the attacker's account from a file (`read_file`): user tasks 0, 2,
   12 and 13. That is the classifier's job in the hybrid.
+- With the Nov 18 live runs added, v2 (including the Nov 19 "already blocked" rule) catches 51/62 real
+  hijacks and blocks 1/729 legitimate calls.
 - The fair test is a fresh live run.
