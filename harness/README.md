@@ -48,6 +48,34 @@ flagged one with "<Data omitted because a prompt injection was detected>" (it re
 Note: AgentDojo 0.1.35 sends no temperature for the agent's own calls (`temperature or NOT_GIVEN` drops 0.0),
 so vLLM uses the model's default sampling. Runs are not deterministic; repeat key rows to see the spread.
 
+## Other agent models and repeats
+
+A weaker second agent model gives more successful attacks, so defenses can be compared
+(`AGENT_MODEL`, in `make.sh`):
+
+| `AGENT_MODEL` | Model | vLLM tool parser | Notes |
+| --- | --- | --- | --- |
+| `qwen3.8` (default) | Qwen/Qwen3.8-27B-FP8 | `qwen3_coder` | `THINKING` off / low / medium / xhigh |
+| `qwen2.5-7b` | Qwen/Qwen2.5-7B-Instruct | `hermes` | no reasoning mode (`THINKING=off`) |
+| `llama3.1-8b` | meta-llama/Llama-3.1-8B-Instruct | `llama3_json` | no reasoning mode; gated on Hugging Face |
+
+- Weights, once, on a login node (the image already exists, so this only downloads):
+
+      AGENT_MODEL=qwen2.5-7b ./make.sh setup
+      AGENT_MODEL=llama3.1-8b HF_TOKEN=<your token> ./make.sh setup   # accept the license on its model page first
+
+  The download records the commit it got. Every run serves that commit and writes it to `config.env`
+  (`MODEL_REVISION`).
+- Check the model with a smoke run before anything larger: `AGENT_MODEL=qwen2.5-7b ./make.sh smoke`.
+- Run folders and job names carry the model (`...-a100-qwen2.5-7b-think-off...`). Qwen3.8's names are unchanged.
+- The live judge runs on the agent's own server, so `CHECKER=...live_judge...` needs `AGENT_MODEL=qwen3.8`.
+  The rules work with any model.
+- Llama 3.1's chat template allows one tool call per turn. If a smoke run shows errors, try vLLM's
+  Llama 3.1 JSON tool template: `CHAT_TEMPLATE=<path to the .jinja file>`.
+
+Repeats: `REPEAT=2` (then 3, ...) runs the same setting again. The number goes into the folder name
+(`-r2`) and the Slurm job name, so repeats queued together don't cancel each other.
+
 ## Middleware hook (Gate 1)
 
 `harness/wsa_middleware.py` sits between the agent and its tools. For every call in Workstream B's

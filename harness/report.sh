@@ -14,7 +14,7 @@ for d in "${dirs[@]}"; do
   echo "################################################################################"
   echo "## $(basename "$d")"
   if [ -f "$d/config.env" ]; then
-    grep -E '^(MODE|THINKING|DEFENSE|SUITES|ATTACKS|ATTACK_USER_TASKS|SLURM_JOB_ID)=' "$d/config.env" | sort -u | sed 's/^/   /'
+    grep -E '^(AGENT_MODEL|MODE|THINKING|DEFENSE|SUITES|ATTACKS|ATTACK_USER_TASKS|SLURM_JOB_ID)=' "$d/config.env" | sort -u | sed 's/^/   /'
     job=$(sed -n 's/^SLURM_JOB_ID=//p' "$d/config.env" | tail -1)
     if [ -n "$job" ] && command -v sacct >/dev/null; then
       sacct -j "$job" -X -n -o JobID,State,Elapsed | sed 's/^/   slurm: /'

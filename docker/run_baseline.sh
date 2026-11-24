@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Inside the container: start vLLM on Qwen3.8-27B, wait until it is healthy, run AgentDojo
+# Inside the container: start vLLM on the agent model, wait until it is healthy, run AgentDojo
 # against it, then stop the server. make.sh sets the variables below and records them in
 # $OUT/config.env.
 set -euo pipefail
@@ -10,6 +10,12 @@ GPU_MEM_UTIL=${GPU_MEM_UTIL:-0.90}
 MAX_NUM_SEQS=${MAX_NUM_SEQS:-8}
 ENFORCE_EAGER=${ENFORCE_EAGER:-1}
 THINKING=${THINKING:-low}
+# the agent model's vLLM settings (make.sh's AGENT_MODEL); defaults = the project's Qwen3.8-27B
+SERVED_NAME=${SERVED_NAME:-qwen3.8-27b}
+TOOL_PARSER=${TOOL_PARSER:-qwen3_coder}
+REASONING_PARSER=${REASONING_PARSER:-qwen3} # "none" = a model without a reasoning mode
+LANGUAGE_MODEL_ONLY=${LANGUAGE_MODEL_ONLY:-1} # 1 = skip the vision tower (Qwen3.8 is multimodal)
+CHAT_TEMPLATE=${CHAT_TEMPLATE:-}
 PORT=${PORT:-8000}
 BENCHMARK_VERSION=${BENCHMARK_VERSION:-v1.2.2}
 SUITES=${SUITES:-banking} # the project's focus; "all" = workspace slack travel banking
@@ -44,7 +50,7 @@ if [ "$DEFENSE" = transformers_pi_detector ]; then
 fi
 # AgentDojo 0.1.35's tool filter calls the model by the config name ("vllm_parsed"), not by the served
 # id, so serve that name too when the tool filter is on (other runs stay exactly as before).
-served=(qwen3.8-27b)
+served=("$SERVED_NAME")
 if [ "$DEFENSE" = tool_filter ]; then served+=(vllm_parsed); fi
 HARNESS="$(cd "$(dirname "$0")/.." && pwd)/harness" # put on AgentDojo's PYTHONPATH only, not vLLM's
 # Workstream B's checkers and provenance code (judge/), when present, so WSA_CHECKER can name them
@@ -63,6 +69,16 @@ case "$THINKING" in
   low | medium | xhigh) template_kwargs="{\"reasoning_effort\": \"$THINKING\"}" ;;
   *) echo "THINKING must be off, low, medium or xhigh (got '$THINKING')" >&2; exit 2 ;;
 esac
+# Model-specific vLLM flags. A model without a reasoning mode gets no reasoning parser and no template
+# kwargs (THINKING must be off; make.sh checks).
+model_flags=(--enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER")
+if [ "$LANGUAGE_MODEL_ONLY" = 1 ]; then model_flags+=(--language-model-only); fi
+if [ "$REASONING_PARSER" != none ]; then
+  model_flags+=(--reasoning-parser "$REASONING_PARSER" --default-chat-template-kwargs "$template_kwargs")
+elif [ "$THINKING" != off ]; then
+  echo "this model has no reasoning mode: THINKING must be off (got '$THINKING')" >&2; exit 2
+fi
+if [ -n "$CHAT_TEMPLATE" ]; then model_flags+=(--chat-template "$CHAT_TEMPLATE"); fi
 if [ "$SUITES" = all ]; then SUITES="workspace slack travel banking"; fi
 
 eager=()
@@ -70,9 +86,10 @@ if [ "$ENFORCE_EAGER" = 1 ]; then eager=(--enforce-eager); fi
 
 mkdir -p "$OUT"
 
-# Flags follow the vLLM recipe for Qwen3.8-27B: the qwen3 reasoning parser keeps <think>
-# blocks out of message.content, and qwen3_coder turns the model's tool calls into OpenAI
-# tool_calls, which AgentDojo's vllm_parsed mode reads. Text only, so skip the vision tower.
+# Qwen3.8-27B flags follow its vLLM recipe: the qwen3 reasoning parser keeps <think> blocks out of
+# message.content, and qwen3_coder turns the model's tool calls into OpenAI tool_calls, which
+# AgentDojo's vllm_parsed mode reads; text only, so skip the vision tower. Qwen2.5 uses the hermes
+# tool parser and Llama 3.1 llama3_json (make.sh, AGENT_MODEL).
 # On a 40 GB card, CUDA graph capture allocates outside --gpu-memory-utilization and can OOM;
 # --enforce-eager avoids that.
 vllm serve "$MODEL" --revision "$MODEL_REVISION" \
@@ -81,10 +98,7 @@ vllm serve "$MODEL" --revision "$MODEL_REVISION" \
   --gpu-memory-utilization "$GPU_MEM_UTIL" \
   --max-num-seqs "$MAX_NUM_SEQS" \
   "${eager[@]}" \
-  --language-model-only \
-  --reasoning-parser qwen3 \
-  --enable-auto-tool-choice --tool-call-parser qwen3_coder \
-  --default-chat-template-kwargs "$template_kwargs" \
+  "${model_flags[@]}" \
   --port "$PORT" >"$OUT/vllm.log" 2>&1 &
 server=$!
 trap 'kill $server 2>/dev/null || true; wait $server 2>/dev/null || true' EXIT

@@ -21,7 +21,16 @@
 #                      the class asks that H100s be used only when a project needs them
 #   SUITES=banking     AgentDojo suites for baseline (the project's focus); all = all four
 #   SHARDS=4           parallel AgentDojo processes per suite, sharing one vLLM server
-#   THINKING=low       Qwen3.8 reasoning effort: off | low | medium | xhigh
+#   AGENT_MODEL=qwen3.8  the agent model: qwen3.8 (Qwen3.8-27B-FP8, the project's model) |
+#                      qwen2.5-7b (Qwen2.5-7B-Instruct) | llama3.1-8b (Llama-3.1-8B-Instruct; gated on
+#                      Hugging Face: accept its license and pass HF_TOKEN to ./make.sh setup). The
+#                      second and third are weaker models for attack-success comparisons; they have
+#                      no reasoning mode (THINKING=off) and their weights are fetched with
+#                      AGENT_MODEL=... ./make.sh setup. The live judge (live_judge) runs on the agent's
+#                      own server, so it needs AGENT_MODEL=qwen3.8.
+#   THINKING=low       Qwen3.8 reasoning effort: off | low | medium | xhigh (always off for the other models)
+#   REPEAT             a repeat number (2, 3, ...) for running the same setting again: it goes into the
+#                      folder and Slurm job names, so copies queued together don't cancel each other
 #   MAX_MODEL_LEN      context length (a100: 32768, h100: 65536)
 #   ENFORCE_EAGER      1 = no CUDA graphs: slower, but fits the 40 GB A100 (a100: 1, h100: 0)
 #   TIME_LIMIT         Slurm walltime for smoke / baseline (default 00:30:00 / 02:00:00,
@@ -46,7 +55,10 @@ REPO=$PWD
 
 ACCOUNT=cmsc848n-class
 PROFILE=${PROFILE:-a100}
-THINKING=${THINKING:-low}
+AGENT_MODEL=${AGENT_MODEL:-qwen3.8}
+REPEAT=${REPEAT:-}
+case "$REPEAT" in "" | [1-9] | [1-9][0-9]) ;; *) echo "REPEAT must be a number from 1 to 99 (got '$REPEAT')" >&2; exit 2 ;; esac
+THINKING_GIVEN=${THINKING:-} # default set below: low for Qwen3.8, off for models without a reasoning mode
 SUITES=${SUITES:-banking}
 SHARDS=${SHARDS:-4}
 ATTACKS=${ATTACKS:-argswap_notice argswap_policy important_instructions}
@@ -70,10 +82,35 @@ case "$DEFENSE" in # checked again inside the job; failing here saves a queue wa
   *) echo "DEFENSE must be empty, tool_filter, spotlighting_with_delimiting, repeat_user_prompt or transformers_pi_detector (got '$DEFENSE')" >&2; exit 2 ;;
 esac
 BENCHMARK_VERSION=v1.2.2
-# FP8 for both profiles, so there is a single copy of the weights. A100s have no FP8 units;
-# vLLM runs the checkpoint as weight-only FP8 (W8A16) through its Marlin kernels.
-MODEL=Qwen/Qwen3.8-27B-FP8
-MODEL_REVISION=017b9c7af6b5689d5dd426a76e0bc077eb5ca20a
+# Per agent model: weights, the name vLLM serves, vLLM's tool-call and reasoning parsers, and the tag
+# added to run folder and job names (empty for the project's default model, so its names don't change).
+# A revision of "main" is resolved to a commit when the weights are downloaded; run_baseline.sh serves
+# that commit and make.sh records it in config.env (MODEL_REVISION_RESOLVED).
+case "$AGENT_MODEL" in
+  qwen3.8)
+    # FP8 for both profiles, so there is a single copy of the weights. A100s have no FP8 units;
+    # vLLM runs the checkpoint as weight-only FP8 (W8A16) through its Marlin kernels.
+    MODEL=Qwen/Qwen3.8-27B-FP8 MODEL_REVISION=017b9c7af6b5689d5dd426a76e0bc077eb5ca20a
+    SERVED_NAME=qwen3.8-27b TOOL_PARSER=qwen3_coder REASONING_PARSER=qwen3 LANGUAGE_MODEL_ONLY=1 MODEL_TAG= ;;
+  qwen2.5-7b)
+    MODEL=Qwen/Qwen2.5-7B-Instruct MODEL_REVISION=${MODEL_REVISION:-main}
+    SERVED_NAME=qwen2.5-7b TOOL_PARSER=hermes REASONING_PARSER=none LANGUAGE_MODEL_ONLY=0 MODEL_TAG=-qwen2.5-7b ;;
+  llama3.1-8b)
+    MODEL=meta-llama/Llama-3.1-8B-Instruct MODEL_REVISION=${MODEL_REVISION:-main}
+    SERVED_NAME=llama3.1-8b TOOL_PARSER=llama3_json REASONING_PARSER=none LANGUAGE_MODEL_ONLY=0 MODEL_TAG=-llama3.1-8b ;;
+  *) echo "AGENT_MODEL must be qwen3.8, qwen2.5-7b or llama3.1-8b (got '$AGENT_MODEL')" >&2; exit 2 ;;
+esac
+CHAT_TEMPLATE=${CHAT_TEMPLATE:-} # optional path to a chat template file for vLLM (default: the model's own)
+if [ "$REASONING_PARSER" = none ]; then THINKING=${THINKING_GIVEN:-off}; else THINKING=${THINKING_GIVEN:-low}; fi
+if [ "$REASONING_PARSER" = none ] && [ "$THINKING" != off ]; then
+  echo "AGENT_MODEL=$AGENT_MODEL has no reasoning mode: set THINKING=off" >&2; exit 2
+fi
+case ",$CHECKER," in
+  *,live_judge:*)
+    if [ "$AGENT_MODEL" != qwen3.8 ]; then
+      echo "the live judge is Qwen3.8 on the agent's own server, so it needs AGENT_MODEL=qwen3.8" >&2; exit 2
+    fi ;;
+esac
 GPU_MEM_UTIL=${GPU_MEM_UTIL:-0.90}
 # Each sequence carries a large linear-attention state, so a low cap leaves room for KV cache.
 # AgentDojo runs at most 4 suites in parallel.
@@ -134,6 +171,7 @@ run_in_image() {
     local envs=() v
     for v in HF_HOME XDG_CACHE_HOME TRITON_CACHE_DIR HF_HUB_OFFLINE TRANSFORMERS_OFFLINE \
       VLLM_NO_USAGE_STATS DO_NOT_TRACK MODE OUT MODEL MODEL_REVISION THINKING MAX_MODEL_LEN \
+      SERVED_NAME TOOL_PARSER REASONING_PARSER LANGUAGE_MODEL_ONLY CHAT_TEMPLATE HF_TOKEN \
       GPU_MEM_UTIL MAX_NUM_SEQS ENFORCE_EAGER BENCHMARK_VERSION SUITES SHARDS \
       ATTACKS INJECTION_TASKS ATTACK_USER_TASKS MODULES DEFENSE \
       WSA_CHECKER WSA_THRESHOLD WSA_BLOCK_MESSAGE WSA_ASK_POLICY WSA_COST_LOG; do  # docker: pass these through
@@ -144,13 +182,18 @@ run_in_image() {
   fi
 }
 
-weights_dir() { echo "$HF_HOME/hub/models--${MODEL//\//--}/snapshots/$MODEL_REVISION"; }
+# MODEL_REVISION is a commit, or a branch such as "main" that the download recorded under refs/
+resolved_revision() {
+  if [[ $MODEL_REVISION =~ ^[0-9a-f]{40}$ ]]; then echo "$MODEL_REVISION"
+  else cat "$HF_HOME/hub/models--${MODEL//\//--}/refs/$MODEL_REVISION" 2>/dev/null || true; fi
+}
+weights_dir() { echo "$HF_HOME/hub/models--${MODEL//\//--}/snapshots/$(resolved_revision)"; }
 
 download_weights() {
   mkdir -p "$HF_HOME"
   run_in_image python3 -c 'import sys
 from huggingface_hub import snapshot_download
-print(snapshot_download(sys.argv[1], revision=sys.argv[2]))' "$MODEL" "$MODEL_REVISION"
+print(snapshot_download(sys.argv[1], revision=sys.argv[2], ignore_patterns=["original/*"]))' "$MODEL" "$MODEL_REVISION"
 }
 
 # Zaratan, login node: everything that needs the Internet. The image is built as a sandbox
@@ -217,10 +260,12 @@ step_run() { # step_run smoke|baseline (on the GPU node)
     squeue -u "$USER" -h -t PENDING -n "$(job_name "$1")" -o %i | xargs -r scancel
   fi
   if [ "$BACKEND" = slurm ] && [ ! -f "$SIF" ]; then die "no image at $SIF; run ./make.sh setup first"; fi
-  [ -d "$(weights_dir)" ] || die "no weights at $(weights_dir); run ./make.sh setup first"
-  export MODE=$1 MODEL MODEL_REVISION THINKING MAX_MODEL_LEN GPU_MEM_UTIL MAX_NUM_SEQS ENFORCE_EAGER \
+  [ -n "$(resolved_revision)" ] && [ -d "$(weights_dir)" ] ||
+    die "no $MODEL weights at revision $MODEL_REVISION in $HF_HOME; run AGENT_MODEL=$AGENT_MODEL ./make.sh setup first"
+  MODEL_REVISION_RESOLVED=$(resolved_revision)
+  export MODE=$1 MODEL MODEL_REVISION=$MODEL_REVISION_RESOLVED SERVED_NAME TOOL_PARSER REASONING_PARSER LANGUAGE_MODEL_ONLY CHAT_TEMPLATE THINKING MAX_MODEL_LEN GPU_MEM_UTIL MAX_NUM_SEQS ENFORCE_EAGER \
     BENCHMARK_VERSION SUITES SHARDS ATTACKS INJECTION_TASKS ATTACK_USER_TASKS MODULES DEFENSE HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1
-  export OUT=${RUN_DIR:-$RUNS/$(date +%Y%m%d-%H%M%S)-$MODE-$PROFILE-think-$THINKING${DEFENSE:+-$DEFENSE}${CHECKER:+-checked}}
+  export OUT=${RUN_DIR:-$RUNS/$(date +%Y%m%d-%H%M%S)-$MODE-$PROFILE$MODEL_TAG-think-$THINKING${DEFENSE:+-$DEFENSE}${CHECKER:+-checked}${REPEAT:+-r$REPEAT}}
   mkdir -p "$OUT"
   local commit=unknown v
   if git rev-parse -q HEAD >/dev/null 2>&1; then
@@ -230,7 +275,8 @@ step_run() { # step_run smoke|baseline (on the GPU node)
     echo "# $(date '+%Y-%m-%dT%H:%M:%S%z') on $(hostname) by $USER"
     echo "GIT_COMMIT=$commit"
     echo "SLURM_JOB_ID=${SLURM_JOB_ID:-}"
-    for v in PROFILE MODE MODEL MODEL_REVISION THINKING MAX_MODEL_LEN GPU_MEM_UTIL MAX_NUM_SEQS \
+    for v in PROFILE MODE AGENT_MODEL MODEL MODEL_REVISION SERVED_NAME TOOL_PARSER REASONING_PARSER CHAT_TEMPLATE \
+      REPEAT THINKING MAX_MODEL_LEN GPU_MEM_UTIL MAX_NUM_SEQS \
       ENFORCE_EAGER BENCHMARK_VERSION SUITES SHARDS VLLM_IMAGE IMAGE_HASH DEFENSE \
       CHECKER CHECKER_THRESHOLD BLOCK_MESSAGE ASK_POLICY; do
       echo "$v=${!v}"
@@ -259,7 +305,7 @@ step_run() { # step_run smoke|baseline (on the GPU node)
 # (With a plain "agentdojo-<step>" name, the first baseline to start cancelled every other pending
 # baseline, e.g. jobs 23547164/5 and 23535007.)
 job_name() {
-  local n="agentdojo-$1-think-$THINKING-${DEFENSE:-nodefense}"
+  local n="agentdojo-$1$MODEL_TAG-think-$THINKING-${DEFENSE:-nodefense}${REPEAT:+-r$REPEAT}"
   if [ -n "$CHECKER" ]; then
     n+="-chk$(printf '%s|%s|%s|%s' "$CHECKER" "$CHECKER_THRESHOLD" "$BLOCK_MESSAGE" "$ASK_POLICY" | cksum | cut -d' ' -f1)"
   fi
